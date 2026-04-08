@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+import { v4 as uuidv4 } from 'uuid'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, 'data')
@@ -20,6 +21,8 @@ app.use(express.json())
 // ── Database ──────────────────────────────────────────────────────────────────
 
 const db = new Database(DB_PATH)
+// Ensure the database uses UTF-8 (this is the SQLite default, but explicit is safer)
+db.pragma('encoding = "UTF-8"')
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS documents (
@@ -53,7 +56,12 @@ db.exec(`
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, DOCS_DIR),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  // Use UUID + extension so no Hebrew/non-ASCII characters ever appear on disk.
+  // The original Hebrew filename is stored in the database separately (see upload route).
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ''
+    cb(null, `${uuidv4()}${ext}`)
+  },
 })
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } })
 
@@ -65,10 +73,13 @@ app.get('/api/documents', (req, res) => {
 
 app.post('/api/documents/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'קובץ לא נמצא' })
-  const { originalname, filename, mimetype } = req.file
+  const { filename, mimetype } = req.file
+  // On Windows, multer reads the multipart content-disposition filename as latin1 bytes
+  // even though the browser sends UTF-8. Re-decode it so Hebrew names appear correctly.
+  const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8')
   const result = db.prepare(
     'INSERT INTO documents (file_name, file_path, file_type) VALUES (?, ?, ?)'
-  ).run(originalname, filename, mimetype)
+  ).run(originalName, filename, mimetype)
   res.json(db.prepare('SELECT * FROM documents WHERE id = ?').get(result.lastInsertRowid))
 })
 

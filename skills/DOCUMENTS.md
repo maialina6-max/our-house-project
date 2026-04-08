@@ -28,13 +28,27 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 ```
 
+## Filename Handling (Windows UTF-8 fix)
+
+Files on disk use a **UUID filename** (`{uuid}.pdf`, `{uuid}.jpg`, etc.) — never the original Hebrew name.
+The original Hebrew name is stored in `file_name` in the database and displayed in the UI.
+
+Why two names:
+- **On disk (`file_path`)**: `{uuid}{ext}` — safe on all filesystems, no encoding issues
+- **In DB (`file_name`)**: original Hebrew name, properly decoded from the multipart header
+
+Windows encoding fix: multer reads the multipart `content-disposition` filename as latin1 bytes even when the browser sends UTF-8. The server re-decodes it:
+```js
+Buffer.from(req.file.originalname, 'latin1').toString('utf8')
+```
+
 ## Upload Flow
 
 Step 1 — User selects or drags a file (PDF or image) in Documents.jsx
 Step 2 — React calls `apiUploadDocument(file)` from `src/hooks/useAPI.js`
 Step 3 — POST /api/documents/upload with multipart/form-data
-Step 4 — multer saves file to data/documents/{timestamp}-{originalname}
-Step 5 — server inserts metadata row, returns full document record
+Step 4 — multer saves file to data/documents/{uuid}.{ext}
+Step 5 — server decodes original Hebrew filename, inserts metadata row, returns full document record
 Step 6 — React adds the returned document to state via `onAdd(doc)`
 
 AI analysis (not yet wired up — planned):
