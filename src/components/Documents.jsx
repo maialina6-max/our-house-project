@@ -218,7 +218,16 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaym
           setAnalyzingIds((prev) => new Set(prev).add(doc.id))
           try {
             const analysis = await apiAnalyzeDocument(doc.id, apiKey)
+            console.log('[analyze] response for doc', doc.id, analysis)
             if (analysis.document) {
+              console.log('[analyze] document fields:', {
+                status: analysis.document.status,
+                category: analysis.document.category,
+                ai_parties: analysis.document.ai_parties,
+                ai_important_dates: analysis.document.ai_important_dates,
+                ai_obligations: analysis.document.ai_obligations,
+                ai_lawyer_questions: analysis.document.ai_lawyer_questions,
+              })
               onUpdate(doc.id, analysis.document)
               // Auto-expand the analysis panel after successful analysis
               setExpandedIds((prev) => new Set(prev).add(doc.id))

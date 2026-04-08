@@ -70,8 +70,9 @@ db.exec(`
   );
 `)
 
-// Migrations — add columns/indexes that didn't exist in earlier schema versions
-for (const stmt of [
+// Migrations — add columns that didn't exist in earlier schema versions.
+// Uses db.prepare().run() (single-statement path) so errors are catchable per statement.
+const migrations = [
   'ALTER TABLE expenses ADD COLUMN source_payment_request_id INTEGER REFERENCES payment_requests(id)',
   'ALTER TABLE expenses ADD COLUMN amount_before_vat REAL',
   'ALTER TABLE expenses ADD COLUMN vat_amount REAL',
@@ -80,8 +81,9 @@ for (const stmt of [
   'ALTER TABLE documents ADD COLUMN ai_important_dates TEXT',
   'ALTER TABLE documents ADD COLUMN ai_obligations TEXT',
   'ALTER TABLE documents ADD COLUMN ai_lawyer_questions TEXT',
-]) {
-  try { db.exec(stmt) } catch { /* column already exists */ }
+]
+for (const sql of migrations) {
+  try { db.prepare(sql).run() } catch { /* column already exists */ }
 }
 // Unique index on file_hash (WHERE NOT NULL so existing null rows don't conflict)
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash) WHERE file_hash IS NOT NULL')
@@ -267,6 +269,13 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
     if (!jsonMatch) throw new Error('תגובת AI לא תקינה')
     const analysis = JSON.parse(jsonMatch[0])
 
+    console.log(`[analyze] doc=${doc.id} category="${analysis.category}" summary_len=${(analysis.summary||'').length}`)
+    console.log(`[analyze] parties=${JSON.stringify(analysis.parties || [])}`)
+    console.log(`[analyze] important_dates=${JSON.stringify(analysis.important_dates || [])}`)
+    console.log(`[analyze] obligations=${JSON.stringify(analysis.obligations || [])}`)
+    console.log(`[analyze] lawyer_questions=${JSON.stringify(analysis.lawyer_questions || [])}`)
+    console.log(`[analyze] has_payment_request=${analysis.has_payment_request}`)
+
     // Update document with AI results (all rich fields)
     const rawUpdated = db.prepare(`
       UPDATE documents
@@ -284,6 +293,7 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
       JSON.stringify(analysis.lawyer_questions || []),
       doc.id,
     )
+    console.log(`[analyze] saved to DB: ai_parties="${rawUpdated.ai_parties}" ai_obligations="${rawUpdated.ai_obligations}"`)
     const updatedDoc = parseDocRow(rawUpdated)
 
     // Create payment_request row if needed
