@@ -116,13 +116,22 @@ VAT calculation rules (server enforces these):
 
 ## PDF Text Extraction
 
-Uses the `pdf-parse` package (server-side). Loaded via:
+Uses the `pdf-parse` package (server-side, v2). Loaded via:
 ```js
-import pdfParse from 'pdf-parse/lib/pdf-parse.js'
+import { PDFParse } from 'pdf-parse'
 ```
-(Direct import path required to avoid ESM issues with the package's test runner)
 
-The raw text is embedded in the prompt as plain text — Claude reads Hebrew accurately this way.
+**IMPORTANT — v2 API is a class, not a function.** Usage:
+```js
+const parser = new PDFParse({ data: fileBuffer })  // fileBuffer is a Node.js Buffer
+const parsed = await parser.getText()
+const text = parsed.text  // string
+```
+
+Do NOT use `pdfParse(buffer)` (v1 API) — it does not exist in v2.
+Do NOT import from `pdf-parse/lib/pdf-parse.js` — the `exports` field blocks subpath imports in v2.
+
+The extracted text is embedded in the prompt as plain text — Claude reads Hebrew accurately this way.
 
 ## Document List Display
 Each document shows:
