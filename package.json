@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node server.js\" \"vite\"",
-    "server": "node server.js",
+    "dev": "concurrently \"node --env-file=.env server.js\" \"vite\"",
+    "server": "node --env-file=.env server.js",
     "client": "vite",
     "build": "vite build",
     "preview": "vite preview"
@@ -16,6 +16,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "multer": "^2.1.1",
+    "openai": "^6.33.0",
     "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

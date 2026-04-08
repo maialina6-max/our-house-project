@@ -13,6 +13,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+
 # Uploaded files — can be large; restore from backup separately
 data/documents/
 

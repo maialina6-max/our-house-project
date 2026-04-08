@@ -1,9 +1,31 @@
 ---
-# API.md — Claude API Integration
+# API.md — OpenAI API Integration
 ---
 
 ## Purpose
-Describes how the app calls the Claude API, how context (expenses, documents) is structured, and what decisions were made around message formatting and token efficiency.
+Describes how the app calls the OpenAI API, how context (expenses, documents) is structured, and what decisions were made around message formatting and token efficiency.
+
+---
+
+## Provider & Model
+
+| Setting | Value |
+|---------|-------|
+| Provider | OpenAI |
+| Model | `gpt-4o-mini` |
+| API key source | User enters in Settings modal → stored in `localStorage['bayit_api_key']` → passed in request body to the server |
+| Server env var | `OPENAI_API_KEY` in `.env` (loaded via `node --env-file=.env server.js`) |
+
+---
+
+## Architecture: All AI calls go through the Express server
+
+Unlike the previous Claude setup (which called the API directly from the browser), **all OpenAI calls happen server-side**. The browser never talks to OpenAI directly.
+
+Reasons:
+- OpenAI does not have a `dangerous-allow-browser` header equivalent
+- Server already has access to files on disk, so PDF extraction and image reading happen naturally before the API call
+- The API key is passed from browser → local Express server only (localhost traffic, not public)
 
 ---
 
@@ -11,82 +33,121 @@ Describes how the app calls the Claude API, how context (expenses, documents) is
 
 | File | Role |
 |------|------|
-| `src/hooks/useClaudeAPI.js` | Fetch logic, loading/error state |
-| `src/utils/buildSystemPrompt.js` | Constructs Hebrew system prompt with expense data |
+| `src/hooks/useClaudeAPI.js` | Builds system prompt, calls `POST /api/chat`, manages loading/error state |
+| `src/hooks/useAPI.js` | `apiChat()`, `apiAnalyzeDocument()`, `apiAskDocument()` |
+| `src/utils/buildSystemPrompt.js` | Constructs Hebrew system prompt with expense + document metadata |
 | `src/components/Chat.jsx` | Calls `sendMessage`, manages conversation state |
+| `server.js` | `callOpenAI()` helper + `/api/chat`, `/api/documents/:id/analyze`, `/api/documents/:id/ask` routes |
 
 ---
 
-## API Call Structure
+## Server-side OpenAI helper
+
+```js
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
+async function callOpenAI(apiKey, messages, maxTokens = 1024) {
+  const client = apiKey ? new OpenAI({ apiKey }) : openai
+  const completion = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    max_tokens: maxTokens,
+    messages,
+  })
+  return completion.choices[0].message.content ?? ''
+}
+```
+
+The per-request `apiKey` (from browser localStorage) overrides the server env default. This lets the user supply their own key via the Settings modal.
+
+---
+
+## Chat: POST /api/chat
 
 ```
-POST https://api.anthropic.com/v1/messages
-Headers:
-  x-api-key: <user's key from localStorage>
-  anthropic-version: 2023-06-01
-  anthropic-dangerous-allow-browser: true
-  content-type: application/json
+Body: { messages, systemPrompt, documents: [id, ...], apiKey }
 
-Body:
-{
-  model: "claude-sonnet-4-20250514",
-  max_tokens: 4096,
-  system: <Hebrew system prompt with expenses>,
-  messages: [
-    // Prior turns as plain text:
-    { role: "user", content: "שאלה קודמת" },
-    { role: "assistant", content: "תשובה קודמת" },
-    // Current turn with documents:
+Server builds OpenAI messages array:
+  [
+    { role: 'system', content: systemPrompt },
+    ...prior turns as { role, content: string }...,
     {
-      role: "user",
+      role: 'user',
       content: [
-        { type: "document", source: { type: "base64", media_type: "application/pdf", data: "..." }, title: "filename.pdf", citations: { enabled: false } },
-        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "..." } },
-        { type: "text", text: "שאלת המשתמש" }
+        { type: 'text', text: '=== filename.pdf ===\n<extracted text>' },   // PDF
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,...' } }, // image
+        { type: 'text', text: 'user question' }
       ]
     }
   ]
-}
+
+Response: { answer: string }
 ```
+
+PDFs are text-extracted server-side with `pdf-parse` (PDFParse class, v2 API).
+Images are sent as `image_url` base64 data URIs.
 
 ---
 
 ## System Prompt (`buildSystemPrompt.js`)
 
-The system prompt is built dynamically on each API call and contains:
-1. Role description in Hebrew ("you are a personal assistant for a house-building project...")
-2. Full expense log as a formatted table (date | description | amount | category)
-3. Category breakdown summary (category: total)
+Built dynamically on each call with:
+1. Role description in Hebrew
+2. Full expense log as a formatted table
+3. Category breakdown summary
 4. Grand total
-5. Instructions: answer in Hebrew, recommend professionals, be clear when you don't know
+5. "=== מסמכים שהועלו ===" section with per-document: name, category, summary, parties, dates, obligations
+6. Instructions: answer in Hebrew, recommend professionals, cite documents
 
-This ensures Claude always has fresh expense data without requiring any conversation history replay.
+---
+
+## Document Analysis: POST /api/documents/:id/analyze
+
+```
+Header: x-api-key: <user's OpenAI key>
+
+PDF  → extract text → single text message with ANALYSIS_PROMPT + text
+Image → read as base64 → [text prompt] + [image_url block]
+
+Response: { document, payment_request }
+```
+
+Returns rich JSON with: category, summary, parties, important_dates, obligations, lawyer_questions, has_payment_request, payment_request.
+
+---
+
+## Document Q&A: POST /api/documents/:id/ask
+
+```
+Body: { question, apiKey }
+
+PDF  → extract text → [system] + [user: text + question]
+Image → base64 → [system] + [user: image_url + question]
+
+Response: { answer: string }
+```
+
+System prompt instructs Claude to answer only from this document, in Hebrew, citing the relevant section.
 
 ---
 
 ## Document Injection Strategy
 
-Documents are injected **only into the current user turn**, not into prior turns. This is the critical token-efficiency decision:
+Documents are injected **only into the current user turn**. Prior turns use plain text content. This keeps token usage at O(N documents) rather than O(N × M turns).
 
-- **Without this**: N documents × M conversation turns = O(N×M) tokens per request. A user with 5 PDFs and 20 messages would resend all 5 PDFs 20 times.
-- **With this**: N documents × 1 = O(N) tokens per request, regardless of conversation length.
+---
 
-The trade-off: if the user asks a follow-up question ("what did you mean by X?"), Claude can still answer from its response in the conversation history. Only the *raw document content* is not re-sent.
+## Settings UI
+
+- Label: "מפתח API של OpenAI"
+- Placeholder: `sk-proj-...`
+- Stored in `localStorage['bayit_api_key']`
+- Passed as `apiKey` in the JSON body of all server API calls
 
 ---
 
 ## How to Extend
 
-- **Streaming responses**: Replace the `await fetch(...)` call with a streaming fetch and parse SSE chunks. Update message content progressively with `setMessages`.
-- **Model selection**: Add a settings UI to let the user pick the model. Store in `localStorage['bayit_model']`. Default remains `claude-sonnet-4-20250514`.
-- **Rate limit handling**: Check `response.status === 429` and show a "too many requests, wait a moment" message in Hebrew.
-- **Token usage display**: The API response includes `usage.input_tokens` and `usage.output_tokens`. Display these in the chat for transparency.
-
----
-
-## Gotchas
-
-- `anthropic-dangerous-allow-browser: true` is required because browsers block direct API calls to Anthropic. Remove this header if you move API calls to a backend.
-- The Vite dev proxy (`/api/claude` → `https://api.anthropic.com/v1/messages`) is configured but the current code calls `https://api.anthropic.com/v1/messages` directly with the browser header. The proxy is available as an alternative for environments where the dangerous-allow-browser header is not desired.
-- Claude's `document` content block only supports `application/pdf`. Other file types (Word, Excel) cannot be injected as documents — only as images if they can be converted, or as extracted text.
-- The `citations: { enabled: false }` field on document blocks disables citation markers in the response, keeping answers clean for a chat UI.
+- **Model upgrade**: Change `'gpt-4o-mini'` to `'gpt-4o'` in `callOpenAI` for higher quality at higher cost.
+- **Streaming**: Use `openai.chat.completions.stream()` on the server and pipe SSE chunks to the browser.
+- **Rate limit handling**: Check for OpenAI error code `429` and show a Hebrew retry message.
+- **Token usage**: `completion.usage.prompt_tokens` / `completion.usage.completion_tokens` are available in the server response.

@@ -8,6 +8,7 @@ import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { PDFParse } from 'pdf-parse'
+import OpenAI from 'openai'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, 'data')
@@ -99,28 +100,19 @@ const storage = multer.diskStorage({
 })
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } })
 
-// ── Claude AI helper ──────────────────────────────────────────────────────────
+// ── OpenAI helper ─────────────────────────────────────────────────────────────
 
-async function callClaude(apiKey, userContent) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: userContent }],
-    }),
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
+// Call OpenAI chat completions. apiKey overrides the env default per-request.
+async function callOpenAI(apiKey, messages, maxTokens = 1024) {
+  const client = apiKey ? new OpenAI({ apiKey }) : openai
+  const completion = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    max_tokens: maxTokens,
+    messages,
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `Claude API error ${response.status}`)
-  }
-  const data = await response.json()
-  return data.content?.[0]?.text ?? ''
+  return completion.choices[0].message.content ?? ''
 }
 
 const ANALYSIS_PROMPT = `אתה מנתח מסמכים הקשורים לרכישת קרקע ובנייה במושב בישראל.
@@ -241,28 +233,27 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'קובץ לא נמצא בדיסק' })
 
   try {
-    let userContent
-
+    let messages
     if (doc.file_type === 'application/pdf') {
-      // Extract text from PDF and send as text to Claude
       const fileBuffer = fs.readFileSync(filePath)
       const parser = new PDFParse({ data: fileBuffer })
       const parsed = await parser.getText()
       const pdfText = parsed.text || ''
-      userContent = `${ANALYSIS_PROMPT}\n\nתוכן המסמך (PDF):\n${pdfText}`
+      messages = [{ role: 'user', content: `${ANALYSIS_PROMPT}\n\nתוכן המסמך (PDF):\n${pdfText}` }]
     } else if (doc.file_type.startsWith('image/')) {
-      // Send image as base64
-      const fileBuffer = fs.readFileSync(filePath)
-      const base64 = fileBuffer.toString('base64')
-      userContent = [
-        { type: 'text', text: ANALYSIS_PROMPT },
-        { type: 'image', source: { type: 'base64', media_type: doc.file_type, data: base64 } },
-      ]
+      const base64 = fs.readFileSync(filePath).toString('base64')
+      messages = [{
+        role: 'user',
+        content: [
+          { type: 'text', text: ANALYSIS_PROMPT },
+          { type: 'image_url', image_url: { url: `data:${doc.file_type};base64,${base64}` } },
+        ],
+      }]
     } else {
       return res.status(400).json({ error: 'סוג קובץ לא נתמך לניתוח' })
     }
 
-    const rawText = await callClaude(apiKey, userContent)
+    const rawText = await callOpenAI(apiKey, messages)
 
     // Extract JSON from response (strip markdown code fences if present)
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
@@ -338,45 +329,81 @@ app.post('/api/documents/:id/ask', async (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'קובץ לא נמצא בדיסק' })
 
   try {
-    let userContent
+    const SYSTEM = 'אתה מנתח מסמך בודד מפרויקט רכישת קרקע ובנייה במושב בישראל. ענה רק על פי המסמך המצורף. ענה בעברית. היה ספציפי וציין את החלק הרלוונטי במסמך.'
+    let messages
     if (doc.file_type === 'application/pdf') {
       const fileBuffer = fs.readFileSync(filePath)
       const parser = new PDFParse({ data: fileBuffer })
       const parsed = await parser.getText()
-      userContent = `תוכן המסמך (PDF):\n${parsed.text || ''}\n\nשאלה: ${question}`
+      messages = [
+        { role: 'system', content: SYSTEM },
+        { role: 'user', content: `תוכן המסמך (PDF):\n${parsed.text || ''}\n\nשאלה: ${question}` },
+      ]
     } else if (doc.file_type.startsWith('image/')) {
       const base64 = fs.readFileSync(filePath).toString('base64')
-      userContent = [
-        { type: 'image', source: { type: 'base64', media_type: doc.file_type, data: base64 } },
-        { type: 'text', text: `שאלה: ${question}` },
+      messages = [
+        { role: 'system', content: SYSTEM },
+        { role: 'user', content: [
+          { type: 'image_url', image_url: { url: `data:${doc.file_type};base64,${base64}` } },
+          { type: 'text', text: `שאלה: ${question}` },
+        ]},
       ]
     } else {
       return res.status(400).json({ error: 'סוג קובץ לא נתמך' })
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        system: 'אתה מנתח מסמך בודד מפרויקט רכישת קרקע ובנייה במושב בישראל. ענה רק על פי המסמך המצורף. ענה בעברית. היה ספציפי וציין את החלק הרלוונטי במסמך.',
-        messages: [{ role: 'user', content: userContent }],
-      }),
-    })
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err?.error?.message || `Claude API error ${response.status}`)
-    }
-    const data = await response.json()
-    res.json({ answer: data.content?.[0]?.text ?? '' })
+    const answer = await callOpenAI(apiKey, messages)
+    res.json({ answer })
   } catch (err) {
     console.error('Document ask error:', err)
     res.status(500).json({ error: err.message || 'שגיאה בשאלה' })
+  }
+})
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+app.post('/api/chat', async (req, res) => {
+  const { messages: history, systemPrompt, documents: docIds, apiKey } = req.body
+  if (!apiKey) return res.status(400).json({ error: 'מפתח API חסר' })
+
+  try {
+    // Build OpenAI messages: system + conversation history + current turn with doc content
+    const oaiMessages = [{ role: 'system', content: systemPrompt || '' }]
+
+    // Prior turns (all but last)
+    for (const m of history.slice(0, -1)) {
+      oaiMessages.push({ role: m.role, content: m.content })
+    }
+
+    // Current user turn — inline document content
+    const lastText = history[history.length - 1].content
+    const userParts = []
+
+    for (const docId of (docIds || [])) {
+      const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(docId)
+      if (!doc) continue
+      const filePath = path.join(DOCS_DIR, doc.file_path)
+      if (!fs.existsSync(filePath)) continue
+      try {
+        if (doc.file_type === 'application/pdf') {
+          const parser = new PDFParse({ data: fs.readFileSync(filePath) })
+          const parsed = await parser.getText()
+          userParts.push({ type: 'text', text: `=== ${doc.file_name} ===\n${parsed.text || ''}` })
+        } else if (doc.file_type.startsWith('image/')) {
+          const base64 = fs.readFileSync(filePath).toString('base64')
+          userParts.push({ type: 'image_url', image_url: { url: `data:${doc.file_type};base64,${base64}` } })
+        }
+      } catch { /* skip unreadable doc */ }
+    }
+
+    userParts.push({ type: 'text', text: lastText })
+    oaiMessages.push({ role: 'user', content: userParts })
+
+    const answer = await callOpenAI(apiKey, oaiMessages, 4096)
+    res.json({ answer })
+  } catch (err) {
+    console.error('Chat error:', err)
+    res.status(500).json({ error: err.message || 'שגיאה בצ׳אט' })
   }
 })
 

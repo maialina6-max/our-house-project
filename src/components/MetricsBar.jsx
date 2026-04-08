@@ -42,17 +42,17 @@ export default function MetricsBar({ documents, expenses, apiKey, onSaveApiKey }
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-title">⚙️ הגדרות</div>
             <div className="form-group">
-              <label>מפתח API של Claude</label>
+              <label>מפתח API של OpenAI</label>
               <input
                 type="password"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                placeholder="sk-ant-..."
+                placeholder="sk-proj-..."
                 dir="ltr"
               />
             </div>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
-              המפתח נשמר בדפדפן בלבד ואינו נשלח לשום שרת מלבד Anthropic.
+              המפתח נשמר בדפדפן בלבד ואינו נשלח לשום שרת מלבד OpenAI.
             </p>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowSettings(false)}>ביטול</button>
