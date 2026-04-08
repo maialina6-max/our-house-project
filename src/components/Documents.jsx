@@ -1,35 +1,33 @@
 import { useRef, useState } from 'react'
-import { formatFileSize } from '../utils/formatCurrency'
+import { apiUploadDocument } from '../hooks/useAPI'
 
 const CATEGORIES = ['היתר בנייה', 'חוזה', 'קבלה', 'מסמך רשמי', 'תכנית', 'אחר']
 
-function docIcon(type) {
-  if (type === 'application/pdf') return '📕'
-  if (type.startsWith('image/')) return '🖼️'
+function docIcon(fileType) {
+  if (fileType === 'application/pdf') return '📕'
+  if (fileType && fileType.startsWith('image/')) return '🖼️'
   return '📎'
 }
 
 export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
   const fileInputRef = useRef(null)
   const [activeFilter, setActiveFilter] = useState('הכל')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
 
-  function handleFiles(files) {
+  async function handleFiles(files) {
+    setUploading(true)
+    setUploadError(null)
     for (const file of files) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        const base64 = e.target.result.split(',')[1]
-        onAdd({
-          id: crypto.randomUUID(),
-          name: file.name,
-          type: file.type || 'application/octet-stream',
-          category: 'אחר',
-          size: file.size,
-          uploadedAt: new Date().toISOString(),
-          data: base64,
-        })
+      try {
+        const doc = await apiUploadDocument(file)
+        onAdd(doc)
+      } catch (err) {
+        setUploadError('ההעלאה נכשלה, נסו שוב.')
+        console.error(err)
       }
-      reader.readAsDataURL(file)
     }
+    setUploading(false)
   }
 
   function handleDrop(e) {
@@ -44,7 +42,7 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
     ? documents
     : documents.filter((d) => d.category === activeFilter)
 
-  const sorted = [...visible].sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))
+  const sorted = [...visible].sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at))
 
   return (
     <div>
@@ -52,12 +50,15 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
         className="upload-area"
         onDrop={handleDrop}
         onDragOver={(e) => e.preventDefault()}
-        onClick={() => fileInputRef.current.click()}
+        onClick={() => !uploading && fileInputRef.current.click()}
+        style={{ cursor: uploading ? 'wait' : 'pointer' }}
       >
         <label className="upload-label">
           <span className="upload-icon">📤</span>
-          <span className="upload-text">גרור קבצים לכאן או לחץ להעלאה</span>
-          <span className="upload-hint">PDF, תמונות — עד 5MB לקובץ</span>
+          <span className="upload-text">
+            {uploading ? 'מעלה...' : 'גרור קבצים לכאן או לחץ להעלאה'}
+          </span>
+          <span className="upload-hint">PDF, תמונות — עד 20MB לקובץ</span>
         </label>
         <input
           ref={fileInputRef}
@@ -68,6 +69,10 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
           style={{ display: 'none' }}
         />
       </div>
+
+      {uploadError && (
+        <p style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{uploadError}</p>
+      )}
 
       {documents.length === 0 ? (
         <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
@@ -102,12 +107,11 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
             <div className="doc-list">
               {sorted.map((doc) => (
                 <div key={doc.id} className="doc-item">
-                  <span className="doc-icon">{docIcon(doc.type)}</span>
+                  <span className="doc-icon">{docIcon(doc.file_type)}</span>
                   <div className="doc-info">
-                    <div className="doc-name">{doc.name}</div>
+                    <div className="doc-name">{doc.file_name}</div>
                     <div className="doc-meta">
-                      <span>{formatFileSize(doc.size)}</span>
-                      <span>{new Date(doc.uploadedAt).toLocaleDateString('he-IL')}</span>
+                      <span>{new Date(doc.uploaded_at).toLocaleDateString('he-IL')}</span>
                     </div>
                   </div>
                   <select

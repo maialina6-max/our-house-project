@@ -56,13 +56,11 @@ export default function Expenses({ expenses, onAdd, onDelete, onUpdate }) {
       setEditingId(null)
     } else {
       onAdd({
-        id: crypto.randomUUID(),
         description: form.description,
         amount: Number(form.amount),
         category: form.category,
         date: form.date,
         notes: form.notes,
-        createdAt: new Date().toISOString(),
       })
     }
     setForm(EMPTY_FORM)

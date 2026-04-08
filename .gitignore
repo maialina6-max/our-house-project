@@ -1,7 +1,19 @@
-@"
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Editor / OS
+.vscode/
+.idea/
 __pycache__/
 .venv/
 *.pyc
-.vscode/
-.idea/
-"@ | Set-Content .gitignore
+.DS_Store
+Thumbs.db
+
+# Uploaded files — can be large; restore from backup separately
+data/documents/
+
+# data/bayit.db is intentionally tracked so the database is backed up with the repo

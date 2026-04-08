@@ -1,17 +1,20 @@
 import './App.css'
-import { useState } from 'react'
-import { useLocalStorage } from './hooks/useLocalStorage'
+import { useState, useEffect } from 'react'
 import MetricsBar from './components/MetricsBar'
 import Sidebar from './components/Sidebar'
 import Documents from './components/Documents'
 import Expenses from './components/Expenses'
 import Chat from './components/Chat'
 import { formatCurrency } from './utils/formatCurrency'
+import {
+  apiGetDocuments, apiDeleteDocument, apiUpdateDocument,
+  apiGetExpenses, apiAddExpense, apiDeleteExpense, apiUpdateExpense,
+} from './hooks/useAPI'
 
 function Dashboard({ documents, expenses, onTabChange }) {
   const total = expenses.reduce((sum, e) => sum + Number(e.amount), 0)
   const recentExpenses = [...expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5)
-  const recentDocs = [...documents].sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)).slice(0, 5)
+  const recentDocs = [...documents].sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at)).slice(0, 5)
 
   return (
     <div>
@@ -64,7 +67,7 @@ function Dashboard({ documents, expenses, onTabChange }) {
               {recentDocs.map((d) => (
                 <div key={d.id} style={{ fontSize: 14 }}>
                   <span className="badge" style={{ marginInlineEnd: 8 }}>{d.category}</span>
-                  {d.name}
+                  {d.file_name}
                 </div>
               ))}
             </div>
@@ -84,32 +87,54 @@ function Dashboard({ documents, expenses, onTabChange }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [documents, setDocuments] = useLocalStorage('bayit_documents', [])
-  const [expenses, setExpenses] = useLocalStorage('bayit_expenses', [])
-  const [apiKey, setApiKey] = useLocalStorage('bayit_api_key', '')
+  const [documents, setDocuments] = useState([])
+  const [expenses, setExpenses] = useState([])
+  const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('bayit_api_key') || '')
 
+  useEffect(() => {
+    apiGetDocuments().then(setDocuments).catch(console.error)
+    apiGetExpenses().then(setExpenses).catch(console.error)
+  }, [])
+
+  function saveApiKey(key) {
+    setApiKeyState(key)
+    localStorage.setItem('bayit_api_key', key)
+  }
+
+  // Documents
   function addDocument(doc) {
     setDocuments((prev) => [doc, ...prev])
   }
 
   function deleteDocument(id) {
-    setDocuments((prev) => prev.filter((d) => d.id !== id))
+    apiDeleteDocument(id)
+      .then(() => setDocuments((prev) => prev.filter((d) => d.id !== id)))
+      .catch(console.error)
   }
 
   function updateDocument(id, data) {
-    setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...data } : d)))
+    apiUpdateDocument(id, data)
+      .then((updated) => setDocuments((prev) => prev.map((d) => (d.id === id ? updated : d))))
+      .catch(console.error)
   }
 
+  // Expenses
   function addExpense(expense) {
-    setExpenses((prev) => [expense, ...prev])
+    apiAddExpense(expense)
+      .then((saved) => setExpenses((prev) => [saved, ...prev]))
+      .catch(console.error)
   }
 
   function deleteExpense(id) {
-    setExpenses((prev) => prev.filter((e) => e.id !== id))
+    apiDeleteExpense(id)
+      .then(() => setExpenses((prev) => prev.filter((e) => e.id !== id)))
+      .catch(console.error)
   }
 
   function updateExpense(id, data) {
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, ...data } : e)))
+    apiUpdateExpense(id, data)
+      .then((updated) => setExpenses((prev) => prev.map((e) => (e.id === id ? updated : e))))
+      .catch(console.error)
   }
 
   function renderContent() {
@@ -133,7 +158,7 @@ export default function App() {
         documents={documents}
         expenses={expenses}
         apiKey={apiKey}
-        onSaveApiKey={setApiKey}
+        onSaveApiKey={saveApiKey}
       />
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
       <main className="main-content">

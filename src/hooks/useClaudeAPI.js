@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { buildSystemPrompt } from '../utils/buildSystemPrompt'
+import { apiGetDocumentContent } from './useAPI'
 
 export function useClaudeAPI(apiKey) {
   const [isLoading, setIsLoading] = useState(false)
@@ -10,30 +11,34 @@ export function useClaudeAPI(apiKey) {
     setError(null)
 
     try {
-      // Build content array for the last user message
-      // Documents injected only into the current turn (not history) to avoid token explosion
       const lastUserText = messages[messages.length - 1].content
       const content = []
 
+      // Fetch each document's file content from the local server and forward to Claude
       for (const doc of documents) {
-        if (doc.type === 'application/pdf') {
-          content.push({
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: doc.data },
-            title: doc.name,
-            citations: { enabled: false },
-          })
-        } else if (doc.type.startsWith('image/')) {
-          content.push({
-            type: 'image',
-            source: { type: 'base64', media_type: doc.type, data: doc.data },
-          })
+        try {
+          const { base64, type } = await apiGetDocumentContent(doc.id)
+          if (type === 'application/pdf') {
+            content.push({
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: base64 },
+              title: doc.file_name,
+              citations: { enabled: false },
+            })
+          } else if (type.startsWith('image/')) {
+            content.push({
+              type: 'image',
+              source: { type: 'base64', media_type: type, data: base64 },
+            })
+          }
+        } catch {
+          // Skip documents that can't be fetched rather than aborting the whole request
         }
       }
 
       content.push({ type: 'text', text: lastUserText })
 
-      // Build message history: all prior turns as plain text, current turn with documents
+      // Prior turns as plain text; current turn includes document content
       const apiMessages = messages.slice(0, -1).map((m) => ({
         role: m.role,
         content: m.content,
