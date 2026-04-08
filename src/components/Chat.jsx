@@ -53,7 +53,7 @@ export default function Chat({ documents, expenses, apiKey }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px - 56px)' }}>
       {!apiKey && (
         <div className="warning-banner">
-          ⚠️ לא הוגדר מפתח API. פתח את ⚙️ הגדרות כדי להזין את מפתח Claude API שלך.
+          ⚠️ לא הוגדר מפתח API. פתח את ⚙️ הגדרות כדי להזין את מפתח OpenAI שלך.
         </div>
       )}
 

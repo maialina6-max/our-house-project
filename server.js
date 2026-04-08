@@ -224,6 +224,7 @@ app.post('/api/documents/upload', upload.single('file'), (req, res) => {
 
 app.post('/api/documents/:id/analyze', async (req, res) => {
   const apiKey = req.headers['x-api-key']
+  console.log('[analyze] API key received:', apiKey ? apiKey.slice(0, 10) + '...' : 'MISSING')
   if (!apiKey) return res.status(400).json({ error: 'מפתח API חסר' })
 
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
