@@ -166,8 +166,39 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaym
   const [deletingIds, setDeletingIds] = useState(new Set())
   const [duplicateWarning, setDuplicateWarning] = useState(null)
   const [analyzingIds, setAnalyzingIds] = useState(new Set())
+  const [analyzeErrors, setAnalyzeErrors] = useState({})      // id → error string
   const [expandedIds, setExpandedIds] = useState(new Set())   // analysis panel open
   const [chatIds, setChatIds] = useState(new Set())           // mini-chat open
+
+  async function handleAnalyze(id) {
+    if (!apiKey) return
+    setAnalyzingIds((prev) => new Set(prev).add(id))
+    setAnalyzeErrors((prev) => { const n = { ...prev }; delete n[id]; return n })
+    try {
+      const analysis = await apiAnalyzeDocument(id, apiKey)
+      console.log('[analyze] response for doc', id, analysis)
+      if (analysis.document) {
+        console.log('[analyze] document fields:', {
+          status: analysis.document.status,
+          category: analysis.document.category,
+          ai_parties: analysis.document.ai_parties,
+          ai_important_dates: analysis.document.ai_important_dates,
+          ai_obligations: analysis.document.ai_obligations,
+          ai_lawyer_questions: analysis.document.ai_lawyer_questions,
+        })
+        onUpdate(id, analysis.document)
+        setExpandedIds((prev) => new Set(prev).add(id))
+      }
+      if (analysis.payment_request && onPaymentRequestCreated) {
+        onPaymentRequestCreated(analysis.payment_request)
+      }
+    } catch (err) {
+      console.error('AI analysis failed:', err)
+      setAnalyzeErrors((prev) => ({ ...prev, [id]: err.message || 'שגיאה בניתוח' }))
+    } finally {
+      setAnalyzingIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+    }
+  }
 
   async function handleDelete(id) {
     setDeleteError(null)
@@ -215,35 +246,7 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaym
         const doc = result
         onAdd(doc)
         if (apiKey && (file.type === 'application/pdf' || file.type.startsWith('image/'))) {
-          setAnalyzingIds((prev) => new Set(prev).add(doc.id))
-          try {
-            const analysis = await apiAnalyzeDocument(doc.id, apiKey)
-            console.log('[analyze] response for doc', doc.id, analysis)
-            if (analysis.document) {
-              console.log('[analyze] document fields:', {
-                status: analysis.document.status,
-                category: analysis.document.category,
-                ai_parties: analysis.document.ai_parties,
-                ai_important_dates: analysis.document.ai_important_dates,
-                ai_obligations: analysis.document.ai_obligations,
-                ai_lawyer_questions: analysis.document.ai_lawyer_questions,
-              })
-              onUpdate(doc.id, analysis.document)
-              // Auto-expand the analysis panel after successful analysis
-              setExpandedIds((prev) => new Set(prev).add(doc.id))
-            }
-            if (analysis.payment_request && onPaymentRequestCreated) {
-              onPaymentRequestCreated(analysis.payment_request)
-            }
-          } catch (err) {
-            console.error('AI analysis failed:', err)
-          } finally {
-            setAnalyzingIds((prev) => {
-              const next = new Set(prev)
-              next.delete(doc.id)
-              return next
-            })
-          }
+          await handleAnalyze(doc.id)
         }
       } catch (err) {
         setUploadError('ההעלאה נכשלה, נסו שוב.')
@@ -408,6 +411,17 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaym
                         </button>
                       )}
 
+                      {apiKey && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{ fontSize: 12, padding: '4px 10px' }}
+                          onClick={() => handleAnalyze(doc.id)}
+                          disabled={analyzingIds.has(doc.id)}
+                        >
+                          {analyzingIds.has(doc.id) ? 'מנתח...' : isAnalyzed ? 'נתח מחדש' : 'נתח מסמך'}
+                        </button>
+                      )}
+
                       <select
                         value={doc.category}
                         onChange={(e) => onUpdate(doc.id, { category: e.target.value })}
@@ -433,6 +447,13 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaym
                         {deletingIds.has(doc.id) ? '...' : 'מחק'}
                       </button>
                     </div>
+
+                    {/* ── Per-doc analysis error ── */}
+                    {analyzeErrors[doc.id] && (
+                      <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+                        שגיאה בניתוח: {analyzeErrors[doc.id]}
+                      </div>
+                    )}
 
                     {/* ── Expandable analysis panel (Phase 1) ── */}
                     {isExpanded && <AnalysisPanel doc={doc} />}

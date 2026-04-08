@@ -97,13 +97,22 @@ History is session-only (React state, not persisted to DB). Multiple Q&A turns s
 ## Document List Display
 Each card shows:
 - File icon, name, upload date
-- "מנתח..." while analysis in progress, "✓ נותח" when done
-- "▼ פרטי ניתוח" button → expandable `AnalysisPanel` with:
+- "מנתח..." label while analysis in progress; "✓ נותח" when done
+- "▼ פרטי ניתוח" button (analyzed docs only) → expandable `AnalysisPanel`:
   - Summary, parties grid, important dates, obligations, lawyer questions
   - Auto-expands after first successful analysis
-- "💬 שאל" button → inline `DocChat` component
+- "💬 שאל" button (analyzed docs + API key) → inline `DocChat`
+- **"נתח מסמך" / "נתח מחדש" button** (any doc + API key):
+  - `status='processed'` → label "נתח מסמך"
+  - `status='analyzed'` → label "נתח מחדש"
+  - While in-flight → "מנתח..." and disabled
+  - On success → updates document state, auto-expands analysis panel
+  - On error → inline error message below the row
 - Category select (inline)
 - Delete button
+
+## Manual Re-analysis
+`handleAnalyze(id)` is extracted as a shared function used by both the post-upload auto-analyze and the manual button. Both paths update state identically via `onUpdate(id, analysis.document)` and `onPaymentRequestCreated`.
 
 ## Chat System Prompt (Phase 3)
 
