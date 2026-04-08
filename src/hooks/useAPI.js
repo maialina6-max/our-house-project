@@ -33,6 +33,14 @@ export function apiAnalyzeDocument(id, apiKey) {
   })
 }
 
+export function apiAskDocument(id, question, apiKey) {
+  return request(`/api/documents/${id}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, apiKey }),
+  })
+}
+
 export function apiUpdateDocument(id, data) {
   return request(`/api/documents/${id}`, {
     method: 'PUT',

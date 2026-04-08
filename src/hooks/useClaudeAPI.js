@@ -56,7 +56,7 @@ export function useClaudeAPI(apiKey) {
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 4096,
-          system: buildSystemPrompt(expenses),
+          system: buildSystemPrompt(expenses, documents),
           messages: apiMessages,
         }),
       })

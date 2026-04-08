@@ -2,7 +2,7 @@
 
 ## Purpose
 Handle document upload, local file storage, server-side AI analysis with PDF text extraction,
-and automatic payment_request creation from document analysis results.
+automatic payment_request creation, per-document Q&A, and structured metadata used in the main chat.
 
 ## Storage — Local SQLite + Disk
 
@@ -25,159 +25,121 @@ CREATE TABLE IF NOT EXISTS documents (
   ai_extracted_payee  TEXT,
   ai_extracted_date   TEXT,
   status      TEXT NOT NULL DEFAULT 'processed',  -- 'processed' | 'analyzed'
-  file_hash   TEXT UNIQUE   -- SHA-256 hex of file contents, for duplicate detection
+  file_hash   TEXT UNIQUE,          -- SHA-256 for duplicate detection
+  ai_parties          TEXT,         -- JSON array: [{ role, name }]
+  ai_important_dates  TEXT,         -- JSON array: [{ label, date }]
+  ai_obligations      TEXT,         -- JSON array: [string]
+  ai_lawyer_questions TEXT          -- JSON array: [string]
 );
--- Migration adds file_hash to existing installs:
--- ALTER TABLE documents ADD COLUMN file_hash TEXT
--- CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash) WHERE file_hash IS NOT NULL
 ```
+
+Migrations add new columns to existing installs via `ALTER TABLE … ADD COLUMN`.
+All four `ai_*` JSON columns are stored as TEXT and parsed back to arrays by `parseDocRow()` before being returned from any API endpoint.
 
 ## Filename Handling (Windows UTF-8 fix)
 
-Files on disk use a **UUID filename** (`{uuid}.pdf`, `{uuid}.jpg`, etc.) — never the original Hebrew name.
-The original Hebrew name is stored in `file_name` in the database and displayed in the UI.
-
-Why two names:
-- **On disk (`file_path`)**: `{uuid}{ext}` — safe on all filesystems, no encoding issues
-- **In DB (`file_name`)**: original Hebrew name, properly decoded from the multipart header
-
-Windows encoding fix: multer reads the multipart `content-disposition` filename as latin1 bytes even when the browser sends UTF-8. The server re-decodes it:
-```js
-Buffer.from(req.file.originalname, 'latin1').toString('utf8')
-```
+Files on disk use a **UUID filename** — never the original Hebrew name.
+- **On disk (`file_path`)**: `{uuid}{ext}` — safe on all filesystems
+- **In DB (`file_name`)**: original Hebrew name, re-decoded from latin1 multipart bytes
 
 ## Upload + Analysis Flow
 
-Step 1 — User selects or drags a file (PDF or image) in Documents.jsx
-Step 2 — React calls `apiUploadDocument(file)` → POST /api/documents/upload
-Step 3 — multer saves file to data/documents/{uuid}.{ext}
-Step 4 — Server computes SHA-256 hash of the saved file buffer
-Step 5 — Server checks `documents WHERE file_hash = ?`
-  - If match found: delete the temp file from disk, return HTTP 409 `{ duplicate: true, existing_document: { file_name, uploaded_at, category } }`
-  - If no match: continue
-Step 6 — Server decodes original Hebrew filename, inserts row with file_hash, returns document record
-Step 7 — React: if `result.duplicate`, shows amber warning banner (auto-dismisses after 5 s); skips `onAdd`
-Step 8 — React adds doc to state via `onAdd(doc)` (only for non-duplicates)
-Step 6 — If API key is set, React calls `apiAnalyzeDocument(doc.id, apiKey)` → POST /api/documents/:id/analyze
-Step 7 — Server extracts content:
-  - PDF: uses `pdf-parse` to extract raw text → sent as text to Claude
-  - Image: read as base64 → sent as image block to Claude
-Step 8 — Server calls Claude API with extracted content + structured prompt
-Step 9 — Claude returns JSON: category, summary, has_payment_request, payment_request
-Step 10 — Server updates documents row (category, ai_summary, status='analyzed')
-Step 11 — If has_payment_request=true, server inserts row into payment_requests table
-Step 12 — Endpoint returns { document, payment_request }
-Step 13 — React updates document in state; if payment_request returned, adds to paymentRequests state
+1. User selects/drops file → `apiUploadDocument(file)` → POST /api/documents/upload
+2. multer saves to `data/documents/{uuid}.{ext}`
+3. Server computes SHA-256 hash → checks for duplicate
+   - Duplicate: delete temp file, return `409 { duplicate: true, existing_document }`
+   - Not duplicate: insert row with `file_hash`, return document record
+4. React: if `result.duplicate` → show amber warning banner (5 s); else `onAdd(doc)`
+5. If API key set → `apiAnalyzeDocument(doc.id, apiKey)` → POST /api/documents/:id/analyze
+6. Server extracts content (PDF text or image base64), calls Claude, parses rich JSON
+7. Server updates document row with all rich fields, inserts `payment_requests` row if needed
+8. React updates document in state, auto-expands analysis panel, adds payment_request if returned
 
 ## Document Categories
-Always classify into one of:
-- היתר בנייה
-- חוזה
-- קבלה
-- שמאות
-- מסמך רשמי
-- דרישת תשלום
-- אחר
+- היתר בנייה / חוזה / קבלה / שמאות / מסמך רשמי / דרישת תשלום / אחר
 
 ## AI Analysis Endpoint
 
 `POST /api/documents/:id/analyze`
 - Header: `x-api-key: <claude api key>`
-- No request body needed
 - Returns: `{ document, payment_request }` (payment_request is null if none found)
+- document object has all rich fields parsed to arrays (not raw JSON strings)
 
-## AI Extraction Prompt
-
-The server sends this prompt + document content to Claude (claude-sonnet-4-20250514):
-
-```
-Respond ONLY with valid JSON:
+### Prompt (rich extraction)
+Claude returns JSON only:
+```json
 {
-  "category": "one of: היתר בנייה / חוזה / קבלה / שמאות / מסמך רשמי / דרישת תשלום / אחר",
-  "summary": "2-3 sentence summary in Hebrew",
-  "has_payment_request": true or false,
+  "category": "...",
+  "summary": "2-3 sentences in Hebrew",
+  "parties": [{ "role": "מוכר/קונה/רשות/עורך דין/אחר", "name": "..." }],
+  "important_dates": [{ "label": "...", "date": "YYYY-MM-DD or null" }],
+  "obligations": ["single sentence in Hebrew"],
+  "lawyer_questions": ["single sentence in Hebrew"],
+  "has_payment_request": true/false,
   "payment_request": {
-    "description": "what the payment is for, in Hebrew",
-    "payee": "who to pay, in Hebrew",
-    "amount_before_vat": number or null,
-    "vat_required": true or false,
-    "vat_included": true or false,
-    "vat_amount": number or null,
-    "amount_total": number or null,
-    "due_date": "YYYY-MM-DD or null"
+    "description", "payee", "amount_before_vat", "vat_required",
+    "vat_included", "vat_amount", "amount_total", "due_date"
   }
 }
 ```
 
-VAT calculation rules (server enforces these):
-- vat_required=true, vat_included=true: amount_before_vat = amount_total / 1.17
-- vat_required=true, vat_included=false: vat_amount = amount_before_vat * 0.17, amount_total = amount_before_vat + vat_amount
-- vat_required=false: amount_total = amount_before_vat, vat_amount = 0
+## Per-Document Q&A Endpoint (Phase 2)
+
+`POST /api/documents/:id/ask`
+- Body: `{ question: string, apiKey: string }`
+- Loads document from disk, extracts content (same as analyze)
+- Calls Claude with system prompt: answer only from this document, in Hebrew, cite the section
+- Returns: `{ answer: string }`
+
+UI: "💬 שאל" button on each analyzed document card → inline `DocChat` component.
+History is session-only (React state, not persisted to DB). Multiple Q&A turns supported.
+
+## Document List Display
+Each card shows:
+- File icon, name, upload date
+- "מנתח..." while analysis in progress, "✓ נותח" when done
+- "▼ פרטי ניתוח" button → expandable `AnalysisPanel` with:
+  - Summary, parties grid, important dates, obligations, lawyer questions
+  - Auto-expands after first successful analysis
+- "💬 שאל" button → inline `DocChat` component
+- Category select (inline)
+- Delete button
+
+## Chat System Prompt (Phase 3)
+
+`buildSystemPrompt(expenses, documents)` in `src/utils/buildSystemPrompt.js` now accepts a `documents` array and includes a structured "=== מסמכים שהועלו ===" section in the Claude system prompt with: name, category, summary, parties, important dates, obligations.
+
+This gives the main chat both structured metadata (from the system prompt) and raw file content (sent as document/image blocks), for the most accurate answers.
 
 ## PDF Text Extraction
 
-Uses the `pdf-parse` package (server-side, v2). Loaded via:
+Uses `pdf-parse` v2 (class-based API):
 ```js
 import { PDFParse } from 'pdf-parse'
-```
-
-**IMPORTANT — v2 API is a class, not a function.** Usage:
-```js
-const parser = new PDFParse({ data: fileBuffer })  // fileBuffer is a Node.js Buffer
+const parser = new PDFParse({ data: fileBuffer })
 const parsed = await parser.getText()
-const text = parsed.text  // string
+const text = parsed.text
 ```
-
-Do NOT use `pdfParse(buffer)` (v1 API) — it does not exist in v2.
-Do NOT import from `pdf-parse/lib/pdf-parse.js` — the `exports` field blocks subpath imports in v2.
-
-The extracted text is embedded in the prompt as plain text — Claude reads Hebrew accurately this way.
-
-## Document List Display
-Each document shows:
-- File icon (📕 PDF, 🖼️ image, 📎 other)
-- File name
-- Upload date
-- "מנתח..." label while analysis is in progress
-- "✓ נותח" label after successful analysis
-- AI summary (shown below the row as a bordered callout)
-- Category select (user can change inline)
-- Delete button
-
-## How Chat Uses Documents
-Chat does NOT receive base64 file data via props.
-When the user sends a message in Chat:
-1. `useClaudeAPI.js` calls `apiGetDocumentContent(doc.id)` for each document
-2. The server serves the raw file at GET /api/documents/:id/content
-3. The browser converts the file blob to base64
-4. The base64 data is forwarded to the Claude API as `document` or `image` content blocks
-5. After the API call completes, the base64 is discarded — never stored in React state
+Do NOT use `pdfParse(buffer)` (v1 API) or import from `pdf-parse/lib/pdf-parse.js`.
 
 ## Duplicate Detection
-- Computed server-side using SHA-256 of the raw file bytes (Node.js built-in `crypto`)
-- Hash stored in `file_hash TEXT UNIQUE` column; a partial unique index (`WHERE file_hash IS NOT NULL`) ensures old rows with null don't conflict
-- Detection is content-based, not name-based — renaming a file before re-uploading still triggers the warning
-- On 409: `apiUploadDocument` returns the body instead of throwing; Documents.jsx checks `result.duplicate`
-- Warning banner: amber background (`#fef3c7`), shows existing document name + upload date, auto-dismisses after 5 s, X button for immediate dismiss
+- SHA-256 of raw file bytes, stored in `file_hash TEXT UNIQUE`
+- Partial unique index: `WHERE file_hash IS NOT NULL` (nulls from old rows don't conflict)
+- Content-based — renaming still triggers duplicate warning
 
 ## Delete Flow
-1. User clicks "מחק" — button shows "..." and is disabled while in flight
-2. `handleDelete(id)` in Documents.jsx awaits `onDelete(id)` (which is `deleteDocument` in App.jsx)
-3. `deleteDocument` calls `DELETE /api/documents/:id` and returns the promise
-4. Server: deletes related `payment_requests` rows first (CASCADE), then deletes the `documents` row, then `fs.unlinkSync` the file from disk. Returns `{ success: true }`.
-5. On success: App.jsx filters the document out of state (UI updates after confirmed server delete)
-6. On error: Documents.jsx catches and shows inline "המחיקה נכשלה: ..." message; item stays in the list
+1. "מחק" → `handleDelete(id)` awaits `onDelete(id)`
+2. Server: DELETE related `payment_requests` (CASCADE) → DELETE document row → `fs.unlinkSync` file
+3. Returns `{ success: true }`; UI removes item only after server confirms
 
 ## Error Handling
-- Upload failed: show inline error "ההעלאה נכשלה, נסו שוב"
-- Duplicate upload: show amber warning banner — see Duplicate Detection above
-- Delete failed: show inline error "המחיקה נכשלה: <reason>"; document remains in list
-- AI analysis failed: document is saved normally; analysis is silently skipped (console.error logged)
-- No API key: hint shown in Documents.jsx; analysis skipped
-- Server unreachable: fetch calls will throw; show "אין חיבור לשרת" banner
+- Upload failed: inline error "ההעלאה נכשלה, נסו שוב"
+- Duplicate: amber banner (auto-dismiss 5 s)
+- Delete failed: inline error, item stays in list
+- Analysis failed: document saved normally, silently skipped
+- No API key: hint shown; analysis + ask buttons hidden
 
 ## How to Extend
-- Add re-analysis button per document (call POST /api/documents/:id/analyze again)
-- Add preview panel (PDF viewer or image preview inline)
-- Add document search by category or date range
-- Add support for other file types (DOCX extraction via mammoth, etc.)
+- Re-analysis button: call POST /api/documents/:id/analyze again
+- PDF preview: render from `/api/documents/:id/content`
+- Persist Q&A history to a `document_questions` table

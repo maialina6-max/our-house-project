@@ -1,6 +1,24 @@
 import { formatCurrency } from './formatCurrency'
 
-export function buildSystemPrompt(expenses) {
+function buildDocumentContext(documents) {
+  if (!documents || documents.length === 0) return 'אין מסמכים שהועלו.'
+  return documents.map((d) => {
+    const lines = [`שם: ${d.file_name}`, `סיווג: ${d.category}`]
+    if (d.ai_summary) lines.push(`סיכום: ${d.ai_summary}`)
+    if (d.ai_parties && d.ai_parties.length > 0) {
+      lines.push(`צדדים: ${d.ai_parties.map((p) => `${p.name} (${p.role})`).join(', ')}`)
+    }
+    if (d.ai_important_dates && d.ai_important_dates.length > 0) {
+      lines.push(`תאריכים: ${d.ai_important_dates.map((t) => `${t.label}: ${t.date || 'לא ידוע'}`).join('; ')}`)
+    }
+    if (d.ai_obligations && d.ai_obligations.length > 0) {
+      lines.push(`התחייבויות: ${d.ai_obligations.join('; ')}`)
+    }
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+export function buildSystemPrompt(expenses, documents) {
   const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount), 0)
 
   const expenseLines = expenses
@@ -57,6 +75,9 @@ ${expenseLines || 'אין הוצאות רשומות עדיין.'}
 ${categoryLines || 'אין נתונים.'}
 
 סה"כ: ${formatCurrency(totalExpenses)}
+
+== מסמכים שהועלו ==
+${buildDocumentContext(documents)}
 
 == הנחיות ==
 - אם מצורפים מסמכים, נתח אותם לפי הצורך.
