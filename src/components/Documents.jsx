@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { apiUploadDocument } from '../hooks/useAPI'
+import { apiUploadDocument, apiAnalyzeDocument } from '../hooks/useAPI'
 
-const CATEGORIES = ['היתר בנייה', 'חוזה', 'קבלה', 'מסמך רשמי', 'תכנית', 'אחר']
+const CATEGORIES = ['היתר בנייה', 'חוזה', 'קבלה', 'שמאות', 'מסמך רשמי', 'דרישת תשלום', 'אחר']
 
 function docIcon(fileType) {
   if (fileType === 'application/pdf') return '📕'
@@ -9,19 +9,64 @@ function docIcon(fileType) {
   return '📎'
 }
 
-export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
+export default function Documents({ documents, onAdd, onDelete, onUpdate, onPaymentRequestCreated, apiKey }) {
   const fileInputRef = useRef(null)
   const [activeFilter, setActiveFilter] = useState('הכל')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  const [deleteError, setDeleteError] = useState(null)
+  const [deletingIds, setDeletingIds] = useState(new Set())
+  const [duplicateWarning, setDuplicateWarning] = useState(null) // { file_name, uploaded_at, category }
+  const [analyzingIds, setAnalyzingIds] = useState(new Set())
+
+  async function handleDelete(id) {
+    setDeleteError(null)
+    setDeletingIds((prev) => new Set(prev).add(id))
+    try {
+      await onDelete(id)
+    } catch (err) {
+      setDeleteError('המחיקה נכשלה: ' + (err.message || 'שגיאת שרת'))
+    } finally {
+      setDeletingIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+    }
+  }
+
+  function showDuplicateWarning(existing) {
+    setDuplicateWarning(existing)
+    setTimeout(() => setDuplicateWarning(null), 5000)
+  }
 
   async function handleFiles(files) {
     setUploading(true)
     setUploadError(null)
     for (const file of files) {
       try {
-        const doc = await apiUploadDocument(file)
+        const result = await apiUploadDocument(file)
+        if (result.duplicate) {
+          showDuplicateWarning(result.existing_document)
+          continue
+        }
+        const doc = result
         onAdd(doc)
+        // Auto-analyze after upload if API key is available
+        if (apiKey && (file.type === 'application/pdf' || file.type.startsWith('image/'))) {
+          setAnalyzingIds((prev) => new Set(prev).add(doc.id))
+          try {
+            const analysis = await apiAnalyzeDocument(doc.id, apiKey)
+            if (analysis.document) onUpdate(doc.id, analysis.document)
+            if (analysis.payment_request && onPaymentRequestCreated) {
+              onPaymentRequestCreated(analysis.payment_request)
+            }
+          } catch (err) {
+            console.error('AI analysis failed:', err)
+          } finally {
+            setAnalyzingIds((prev) => {
+              const next = new Set(prev)
+              next.delete(doc.id)
+              return next
+            })
+          }
+        }
       } catch (err) {
         setUploadError('ההעלאה נכשלה, נסו שוב.')
         console.error(err)
@@ -74,6 +119,54 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
         <p style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{uploadError}</p>
       )}
 
+      {deleteError && (
+        <p style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{deleteError}</p>
+      )}
+
+      {duplicateWarning && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          background: '#fef3c7',
+          border: '1px solid #f59e0b',
+          borderRadius: 8,
+          padding: '10px 14px',
+          margin: '8px 0',
+          fontSize: 13,
+          color: '#92400e',
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 2 }}>⚠️ המסמך כבר קיים במערכת</div>
+            <div>"{duplicateWarning.file_name}"</div>
+            <div>הועלה בתאריך {new Date(duplicateWarning.uploaded_at).toLocaleDateString('he-IL')}</div>
+          </div>
+          <button
+            onClick={() => setDuplicateWarning(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 16,
+              color: '#92400e',
+              lineHeight: 1,
+              padding: 0,
+              flexShrink: 0,
+            }}
+            aria-label="סגור"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {!apiKey && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '8px 0', textAlign: 'center' }}>
+          ⚠️ הזן מפתח API בהגדרות כדי לאפשר ניתוח אוטומטי של מסמכים
+        </p>
+      )}
+
       {documents.length === 0 ? (
         <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
           עוד לא העליתם מסמכים. גררו קבצים לכאן או לחצו להעלאה.
@@ -106,31 +199,57 @@ export default function Documents({ documents, onAdd, onDelete, onUpdate }) {
           ) : (
             <div className="doc-list">
               {sorted.map((doc) => (
-                <div key={doc.id} className="doc-item">
-                  <span className="doc-icon">{docIcon(doc.file_type)}</span>
-                  <div className="doc-info">
-                    <div className="doc-name">{doc.file_name}</div>
-                    <div className="doc-meta">
-                      <span>{new Date(doc.uploaded_at).toLocaleDateString('he-IL')}</span>
+                <div key={doc.id} className="doc-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className="doc-icon">{docIcon(doc.file_type)}</span>
+                    <div className="doc-info" style={{ flex: 1 }}>
+                      <div className="doc-name">{doc.file_name}</div>
+                      <div className="doc-meta">
+                        <span>{new Date(doc.uploaded_at).toLocaleDateString('he-IL')}</span>
+                        {analyzingIds.has(doc.id) && (
+                          <span style={{ color: 'var(--primary)', fontStyle: 'italic' }}>מנתח...</span>
+                        )}
+                        {doc.status === 'analyzed' && !analyzingIds.has(doc.id) && (
+                          <span style={{ color: 'var(--success, #16a34a)' }}>✓ נותח</span>
+                        )}
+                      </div>
                     </div>
+                    <select
+                      value={doc.category}
+                      onChange={(e) => onUpdate(doc.id, { category: e.target.value })}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        fontSize: 13,
+                        color: 'var(--text)',
+                        background: 'var(--surface)',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => handleDelete(doc.id)}
+                      disabled={deletingIds.has(doc.id)}
+                    >
+                      {deletingIds.has(doc.id) ? '...' : 'מחק'}
+                    </button>
                   </div>
-                  <select
-                    value={doc.category}
-                    onChange={(e) => onUpdate(doc.id, { category: e.target.value })}
-                    style={{
-                      padding: '5px 10px',
-                      borderRadius: 8,
-                      border: '1px solid var(--border)',
+                  {doc.ai_summary && (
+                    <div style={{
                       fontSize: 13,
-                      color: 'var(--text)',
+                      color: 'var(--text-muted)',
                       background: 'var(--surface)',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  <button className="btn btn-danger" onClick={() => onDelete(doc.id)}>מחק</button>
+                      borderRadius: 6,
+                      padding: '6px 10px',
+                      borderRight: '3px solid var(--primary)',
+                    }}>
+                      {doc.ai_summary}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

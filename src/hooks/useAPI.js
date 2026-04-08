@@ -15,10 +15,22 @@ export function apiGetDocuments() {
   return request('/api/documents')
 }
 
-export function apiUploadDocument(file) {
+export async function apiUploadDocument(file) {
   const form = new FormData()
   form.append('file', file)
-  return request('/api/documents/upload', { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/api/documents/upload`, { method: 'POST', body: form })
+  const body = await res.json().catch(() => ({}))
+  // Return 409 body as-is (duplicate: true) instead of throwing
+  if (res.status === 409) return body
+  if (!res.ok) throw new Error(body.error || `שגיאת שרת ${res.status}`)
+  return body
+}
+
+export function apiAnalyzeDocument(id, apiKey) {
+  return request(`/api/documents/${id}/analyze`, {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey },
+  })
 }
 
 export function apiUpdateDocument(id, data) {
@@ -70,4 +82,18 @@ export function apiUpdateExpense(id, data) {
 
 export function apiDeleteExpense(id) {
   return request(`/api/expenses/${id}`, { method: 'DELETE' })
+}
+
+// ── Payment Requests ───────────────────────────────────────────────────────────
+
+export function apiGetPaymentRequests() {
+  return request('/api/payment-requests')
+}
+
+export function apiPayPaymentRequest(id, paid_at) {
+  return request(`/api/payment-requests/${id}/pay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paid_at }),
+  })
 }

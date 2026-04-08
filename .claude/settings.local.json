@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(node -e \"import\\('multer'\\).then\\(m => console.log\\(JSON.stringify\\(Object.keys\\(m.default || m\\), null, 2\\)\\)\\)\")",
+      "Bash(node -e \"import\\('pdf-parse/lib/pdf-parse.js'\\).then\\(\\(\\) => console.log\\('pdfParse OK'\\)\\).catch\\(e => console.error\\('pdfParse FAILED:', e.message\\)\\)\")",
+      "Bash(node -e \"import\\('pdf-parse'\\).then\\(m => console.log\\('default import OK, type:', typeof \\(m.default || m\\)\\)\\).catch\\(e => console.error\\('FAILED:', e.message\\)\\)\")",
+      "Bash(node -e \"import\\('pdf-parse'\\).then\\(m => { console.log\\('keys:', Object.keys\\(m\\)\\); console.log\\('default type:', typeof m.default\\); console.log\\('is fn:', typeof m.default === 'function'\\) }\\)\")",
+      "Bash(node -e \"import\\('pdf-parse'\\).then\\(m => { const fn = m.PDFParse; console.log\\('PDFParse type:', typeof fn\\) }\\)\")",
+      "Bash(node --input-type=module)"
+    ]
+  }
+}

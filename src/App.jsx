@@ -9,10 +9,12 @@ import { formatCurrency } from './utils/formatCurrency'
 import {
   apiGetDocuments, apiDeleteDocument, apiUpdateDocument,
   apiGetExpenses, apiAddExpense, apiDeleteExpense, apiUpdateExpense,
+  apiGetPaymentRequests, apiPayPaymentRequest,
 } from './hooks/useAPI'
 
-function Dashboard({ documents, expenses, onTabChange }) {
+function Dashboard({ documents, expenses, paymentRequests, onTabChange }) {
   const total = expenses.reduce((sum, e) => sum + Number(e.amount), 0)
+  const pendingCount = (paymentRequests || []).filter((pr) => pr.status === 'pending').length
   const recentExpenses = [...expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5)
   const recentDocs = [...documents].sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at)).slice(0, 5)
 
@@ -32,6 +34,12 @@ function Dashboard({ documents, expenses, onTabChange }) {
           <div className="stat-value">{documents.length}</div>
           <div className="stat-label">מסמכים</div>
         </div>
+        {pendingCount > 0 && (
+          <div className="stat-card" style={{ borderColor: '#ef4444', cursor: 'pointer' }} onClick={() => onTabChange('expenses')}>
+            <div className="stat-value" style={{ color: '#ef4444' }}>{pendingCount}</div>
+            <div className="stat-label">דרישות לתשלום</div>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -89,11 +97,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [documents, setDocuments] = useState([])
   const [expenses, setExpenses] = useState([])
+  const [paymentRequests, setPaymentRequests] = useState([])
   const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('bayit_api_key') || '')
 
   useEffect(() => {
     apiGetDocuments().then(setDocuments).catch(console.error)
     apiGetExpenses().then(setExpenses).catch(console.error)
+    apiGetPaymentRequests().then(setPaymentRequests).catch(console.error)
   }, [])
 
   function saveApiKey(key) {
@@ -107,15 +117,24 @@ export default function App() {
   }
 
   function deleteDocument(id) {
-    apiDeleteDocument(id)
+    return apiDeleteDocument(id)
       .then(() => setDocuments((prev) => prev.filter((d) => d.id !== id)))
-      .catch(console.error)
   }
 
   function updateDocument(id, data) {
-    apiUpdateDocument(id, data)
-      .then((updated) => setDocuments((prev) => prev.map((d) => (d.id === id ? updated : d))))
-      .catch(console.error)
+    // data may be a full document object (from analyze) or a partial update
+    if (data && data.id) {
+      // Full document object returned from analyze — replace in state directly
+      setDocuments((prev) => prev.map((d) => (d.id === id ? data : d)))
+    } else {
+      apiUpdateDocument(id, data)
+        .then((updated) => setDocuments((prev) => prev.map((d) => (d.id === id ? updated : d))))
+        .catch(console.error)
+    }
+  }
+
+  function handlePaymentRequestCreated(pr) {
+    setPaymentRequests((prev) => [pr, ...prev])
   }
 
   // Expenses
@@ -137,14 +156,41 @@ export default function App() {
       .catch(console.error)
   }
 
+  // Payment requests
+  async function payPaymentRequest(id, paid_at) {
+    const result = await apiPayPaymentRequest(id, paid_at)
+    setPaymentRequests((prev) => prev.map((pr) => (pr.id === id ? result.payment_request : pr)))
+    if (result.expense) {
+      setExpenses((prev) => [result.expense, ...prev])
+    }
+  }
+
   function renderContent() {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard documents={documents} expenses={expenses} onTabChange={setActiveTab} />
+        return <Dashboard documents={documents} expenses={expenses} paymentRequests={paymentRequests} onTabChange={setActiveTab} />
       case 'documents':
-        return <Documents documents={documents} onAdd={addDocument} onDelete={deleteDocument} onUpdate={updateDocument} />
+        return (
+          <Documents
+            documents={documents}
+            onAdd={addDocument}
+            onDelete={deleteDocument}
+            onUpdate={updateDocument}
+            onPaymentRequestCreated={handlePaymentRequestCreated}
+            apiKey={apiKey}
+          />
+        )
       case 'expenses':
-        return <Expenses expenses={expenses} onAdd={addExpense} onDelete={deleteExpense} onUpdate={updateExpense} />
+        return (
+          <Expenses
+            expenses={expenses}
+            paymentRequests={paymentRequests}
+            onAdd={addExpense}
+            onDelete={deleteExpense}
+            onUpdate={updateExpense}
+            onPayRequest={payPaymentRequest}
+          />
+        )
       case 'chat':
         return <Chat documents={documents} expenses={expenses} apiKey={apiKey} />
       default:
