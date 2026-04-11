@@ -5,11 +5,14 @@ import Sidebar from './components/Sidebar'
 import Documents from './components/Documents'
 import Expenses from './components/Expenses'
 import Chat from './components/Chat'
+import Quotes from './components/Quotes'
 import { formatCurrency } from './utils/formatCurrency'
 import {
   apiGetDocuments, apiDeleteDocument, apiUpdateDocument,
   apiGetExpenses, apiAddExpense, apiDeleteExpense, apiUpdateExpense,
   apiGetPaymentRequests, apiPayPaymentRequest,
+  apiGetQuoteCategories, apiAddQuoteCategory, apiDeleteQuoteCategory,
+  apiGetQuotes, apiAddQuote, apiUpdateQuote, apiDeleteQuote,
 } from './hooks/useAPI'
 
 function Dashboard({ documents, expenses, paymentRequests, onTabChange }) {
@@ -99,11 +102,15 @@ export default function App() {
   const [expenses, setExpenses] = useState([])
   const [paymentRequests, setPaymentRequests] = useState([])
   const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('bayit_api_key') || '')
+  const [quotes, setQuotes] = useState([])
+  const [quoteCategories, setQuoteCategories] = useState([])
 
   useEffect(() => {
     apiGetDocuments().then(setDocuments).catch(console.error)
     apiGetExpenses().then(setExpenses).catch(console.error)
     apiGetPaymentRequests().then(setPaymentRequests).catch(console.error)
+    apiGetQuoteCategories().then(setQuoteCategories).catch(console.error)
+    apiGetQuotes().then(setQuotes).catch(console.error)
   }, [])
 
   function saveApiKey(key) {
@@ -156,6 +163,33 @@ export default function App() {
       .catch(console.error)
   }
 
+  // Quotes
+  async function addQuoteCategory(data) {
+    const saved = await apiAddQuoteCategory(data)
+    setQuoteCategories((prev) => [...prev, saved])
+  }
+
+  async function deleteQuoteCategory(id) {
+    await apiDeleteQuoteCategory(id)
+    setQuoteCategories((prev) => prev.filter((c) => c.id !== id))
+  }
+
+  async function addQuote(data) {
+    const saved = await apiAddQuote(data)
+    setQuotes((prev) => [saved, ...prev])
+  }
+
+  async function updateQuote(id, data) {
+    const updated = await apiUpdateQuote(id, data)
+    setQuotes((prev) => prev.map((q) => (q.id === id ? updated : q)))
+    return updated
+  }
+
+  async function deleteQuote(id) {
+    await apiDeleteQuote(id)
+    setQuotes((prev) => prev.filter((q) => q.id !== id))
+  }
+
   // Payment requests
   async function payPaymentRequest(id, paid_at) {
     const result = await apiPayPaymentRequest(id, paid_at)
@@ -189,6 +223,18 @@ export default function App() {
             onDelete={deleteExpense}
             onUpdate={updateExpense}
             onPayRequest={payPaymentRequest}
+          />
+        )
+      case 'quotes':
+        return (
+          <Quotes
+            quotes={quotes}
+            quoteCategories={quoteCategories}
+            onAddCategory={addQuoteCategory}
+            onDeleteCategory={deleteQuoteCategory}
+            onAddQuote={addQuote}
+            onUpdateQuote={updateQuote}
+            onDeleteQuote={deleteQuote}
           />
         )
       case 'chat':

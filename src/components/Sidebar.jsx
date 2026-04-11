@@ -2,6 +2,7 @@ const NAV_ITEMS = [
   { id: 'dashboard', label: 'בית', icon: '🏠' },
   { id: 'documents', label: 'מסמכים', icon: '📄' },
   { id: 'expenses', label: 'הוצאות', icon: '💰' },
+  { id: 'quotes', label: 'הצעות מחיר', icon: '📊' },
   { id: 'chat', label: 'שאל את הבית', icon: '🤖' },
 ]
 

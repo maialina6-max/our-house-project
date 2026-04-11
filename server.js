@@ -69,6 +69,29 @@ db.exec(`
     paid_at             TEXT,
     created_at          TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS quote_categories (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    icon       TEXT DEFAULT '📋',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS quotes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id   INTEGER NOT NULL REFERENCES quote_categories(id),
+    supplier_name TEXT NOT NULL,
+    amount        REAL,
+    duration_days INTEGER,
+    reliability   INTEGER,
+    my_opinion    TEXT,
+    notes         TEXT,
+    contact       TEXT,
+    status        TEXT DEFAULT 'פתוחה',
+    offer_date    TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
 `)
 
 // Migrations — add columns that didn't exist in earlier schema versions.
@@ -88,6 +111,19 @@ for (const sql of migrations) {
 }
 // Unique index on file_hash (WHERE NOT NULL so existing null rows don't conflict)
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash) WHERE file_hash IS NOT NULL')
+
+// Seed default quote categories if table is empty
+if (db.prepare('SELECT COUNT(*) as n FROM quote_categories').get().n === 0) {
+  const insertCat = db.prepare('INSERT INTO quote_categories (name, icon, sort_order) VALUES (?, ?, ?)')
+  for (const [name, icon, sort_order] of [
+    ['יועץ משכנתאות', '🏦', 1],
+    ['אדריכל', '📐', 2],
+    ['חברת בנייה', '🏗️', 3],
+    ['קבלן שלד', '🧱', 4],
+    ['קבלן גמר', '🔨', 5],
+    ['מעצב פנים', '🎨', 6],
+  ]) insertCat.run(name, icon, sort_order)
+}
 
 // ── Multer ─────────────────────────────────────────────────────────────────────
 
@@ -512,6 +548,75 @@ app.put('/api/expenses/:id', (req, res) => {
 
 app.delete('/api/expenses/:id', (req, res) => {
   db.prepare('DELETE FROM expenses WHERE id = ?').run(req.params.id)
+  res.json({ ok: true })
+})
+
+// ── Quote Categories ───────────────────────────────────────────────────────────
+
+app.get('/api/quote-categories', (_req, res) => {
+  res.json(db.prepare('SELECT * FROM quote_categories ORDER BY sort_order, id').all())
+})
+
+app.post('/api/quote-categories', (req, res) => {
+  const { name, icon } = req.body
+  if (!name) return res.status(400).json({ error: 'שם קטגוריה חובה' })
+  const maxOrder = db.prepare('SELECT MAX(sort_order) as m FROM quote_categories').get().m || 0
+  const result = db.prepare(
+    'INSERT INTO quote_categories (name, icon, sort_order) VALUES (?, ?, ?)'
+  ).run(name.trim(), icon || '📋', maxOrder + 1)
+  res.json(db.prepare('SELECT * FROM quote_categories WHERE id = ?').get(result.lastInsertRowid))
+})
+
+app.delete('/api/quote-categories/:id', (req, res) => {
+  const count = db.prepare('SELECT COUNT(*) as n FROM quotes WHERE category_id = ?').get(req.params.id).n
+  if (count > 0) return res.status(400).json({ error: 'לא ניתן למחוק קטגוריה שיש בה הצעות מחיר' })
+  db.prepare('DELETE FROM quote_categories WHERE id = ?').run(req.params.id)
+  res.json({ ok: true })
+})
+
+// ── Quotes ─────────────────────────────────────────────────────────────────────
+
+app.get('/api/quotes', (req, res) => {
+  const { category_id } = req.query
+  if (category_id) {
+    res.json(db.prepare('SELECT * FROM quotes WHERE category_id = ? ORDER BY created_at DESC').all(category_id))
+  } else {
+    res.json(db.prepare('SELECT * FROM quotes ORDER BY created_at DESC').all())
+  }
+})
+
+app.post('/api/quotes', (req, res) => {
+  const { category_id, supplier_name, amount, duration_days, reliability, my_opinion, notes, contact, status, offer_date } = req.body
+  if (!category_id || !supplier_name) return res.status(400).json({ error: 'קטגוריה ושם ספק חובה' })
+  const result = db.prepare(`
+    INSERT INTO quotes (category_id, supplier_name, amount, duration_days, reliability, my_opinion, notes, contact, status, offer_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    category_id,
+    supplier_name.trim(),
+    amount != null && amount !== '' ? Number(amount) : null,
+    duration_days != null && duration_days !== '' ? Number(duration_days) : null,
+    reliability != null && reliability !== '' ? Number(reliability) : null,
+    my_opinion || null,
+    notes || null,
+    contact || null,
+    status || 'פתוחה',
+    offer_date || null,
+  )
+  res.json(db.prepare('SELECT * FROM quotes WHERE id = ?').get(result.lastInsertRowid))
+})
+
+app.put('/api/quotes/:id', (req, res) => {
+  const fields = req.body
+  const keys = Object.keys(fields)
+  if (keys.length === 0) return res.status(400).json({ error: 'אין שדות לעדכון' })
+  const set = keys.map((k) => `${k} = ?`).join(', ')
+  db.prepare(`UPDATE quotes SET ${set} WHERE id = ?`).run(...keys.map((k) => fields[k]), req.params.id)
+  res.json(db.prepare('SELECT * FROM quotes WHERE id = ?').get(req.params.id))
+})
+
+app.delete('/api/quotes/:id', (req, res) => {
+  db.prepare('DELETE FROM quotes WHERE id = ?').run(req.params.id)
   res.json({ ok: true })
 })
 

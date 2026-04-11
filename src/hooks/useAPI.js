@@ -106,6 +106,51 @@ export function apiPayPaymentRequest(id, paid_at) {
   })
 }
 
+// ── Quote Categories ───────────────────────────────────────────────────────────
+
+export function apiGetQuoteCategories() {
+  return request('/api/quote-categories')
+}
+
+export function apiAddQuoteCategory(data) {
+  return request('/api/quote-categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function apiDeleteQuoteCategory(id) {
+  return request(`/api/quote-categories/${id}`, { method: 'DELETE' })
+}
+
+// ── Quotes ─────────────────────────────────────────────────────────────────────
+
+export function apiGetQuotes(category_id) {
+  const qs = category_id != null ? `?category_id=${category_id}` : ''
+  return request(`/api/quotes${qs}`)
+}
+
+export function apiAddQuote(data) {
+  return request('/api/quotes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function apiUpdateQuote(id, data) {
+  return request(`/api/quotes/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function apiDeleteQuote(id) {
+  return request(`/api/quotes/${id}`, { method: 'DELETE' })
+}
+
 // ── Chat ───────────────────────────────────────────────────────────────────────
 
 export function apiChat(messages, systemPrompt, docIds, apiKey) {
