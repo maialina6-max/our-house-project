@@ -1,6 +1,6 @@
 # CURRENT_STATE.md — Bayit BaMoshav: Exact App State
 
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-04-11
 > This file is the ground truth for new Claude sessions. Read it first before touching any code.
 > Update it after every significant change.
 
@@ -36,6 +36,8 @@
 | SQLite persistence | ✅ | data/bayit.db; auto-created on first run |
 | File persistence on disk | ✅ | data/documents/{uuid}.{ext} |
 | Hebrew filename handling (Windows) | ✅ | latin1→utf8 re-decode in multer handler |
+| Quote comparison module (הצעות מחיר) | ✅ | Tab per category; suppliers table; stars rating; status; search |
+| Quote → payment request auto-creation | ✅ | Status → "נבחר" auto-creates pending payment_request; toast feedback; duplicate-safe |
 | Timeline / milestone tracker | ❌ | Not built; P2 backlog |
 | Chat history persistence | ❌ | Session-only (useState); not saved to DB |
 | Mobile layout | ❌ | Not tested/optimised; desktop only for now |
@@ -154,6 +156,7 @@
 | status | TEXT | 'pending' or 'paid' |
 | paid_at | TEXT | Date paid; set when status → 'paid' |
 | created_at | TEXT | ISO timestamp (auto) |
+| source_quote_id | INTEGER | FK → quotes.id; set when created from a selected quote |
 
 ---
 
@@ -226,6 +229,19 @@ Main chat tab. Uses `useClaudeAPI` hook. Quick-question chips (disappear after f
 ---
 
 ## 7. What We Were Working On Last
+
+**Quote → payment request auto-creation (2026-04-11)**
+
+When a quote's status is changed to "נבחר" (via the status dropdown OR the edit form), the server now:
+1. Checks `payment_requests.source_quote_id` for an existing PR linked to this quote
+2. If none → inserts a new `payment_requests` row with `source_quote_id = quote.id`
+3. Returns `{ quote, payment_request, no_amount_warning }` — old callers that only read `quote` still work via `result.quote ?? result` fallback in App.jsx
+
+Edge cases: no amount → `no_amount_warning: true` (no PR created); duplicate → skipped silently. Neither deletes an existing PR when status changes away from "נבחר".
+
+---
+
+## 8. What We Were Working On Before That
 
 **Migration from Claude API → OpenAI API.**
 

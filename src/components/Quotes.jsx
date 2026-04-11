@@ -45,14 +45,30 @@ const EMPTY_FORM = {
   status: 'פתוחה',
 }
 
-function QuoteRow({ quote, onUpdate, onDelete }) {
+function QuoteRow({ quote, onUpdate, onDelete, onPaymentRequestAdded }) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState(null) // { type: 'success'|'warning', text }
 
   const rowStyle = STATUS_STYLE[quote.status] || {}
+
+  function showToast(type, text) {
+    setToast({ type, text })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  function handleResult(result, supplierName) {
+    if (!result) return
+    if (result.no_amount_warning) {
+      showToast('warning', 'לא הוגדר סכום להצעה — דרישת תשלום לא נוצרה')
+    } else if (result.payment_request) {
+      showToast('success', `✓ נוספה דרישת תשלום עבור ${supplierName}`)
+      onPaymentRequestAdded(result.payment_request)
+    }
+  }
 
   function startEdit() {
     setForm({
@@ -72,7 +88,7 @@ function QuoteRow({ quote, onUpdate, onDelete }) {
   async function handleSave() {
     setSaving(true)
     try {
-      const updated = await onUpdate(quote.id, {
+      const result = await onUpdate(quote.id, {
         supplier_name: form.supplier_name.trim(),
         amount: form.amount !== '' ? Number(form.amount) : null,
         duration_days: form.duration_days !== '' ? Number(form.duration_days) : null,
@@ -85,14 +101,16 @@ function QuoteRow({ quote, onUpdate, onDelete }) {
       })
       setEditing(false)
       setForm(null)
-      if (updated) setExpanded(false)
+      if (result) setExpanded(false)
+      handleResult(result, form.supplier_name.trim())
     } finally {
       setSaving(false)
     }
   }
 
   async function handleStatusChange(newStatus) {
-    await onUpdate(quote.id, { status: newStatus })
+    const result = await onUpdate(quote.id, { status: newStatus })
+    handleResult(result, quote.supplier_name)
   }
 
   if (editing && form) {
@@ -273,6 +291,23 @@ function QuoteRow({ quote, onUpdate, onDelete }) {
                 תאריך הצעה: {new Date(quote.offer_date).toLocaleDateString('he-IL')}
               </div>
             )}
+          </td>
+        </tr>
+      )}
+      {toast && (
+        <tr>
+          <td colSpan={7} style={{ padding: '0 14px 8px 14px' }}>
+            <div style={{
+              padding: '8px 14px',
+              borderRadius: 7,
+              fontSize: 13,
+              fontWeight: 500,
+              background: toast.type === 'success' ? '#E1F5EE' : '#fef9c3',
+              color: toast.type === 'success' ? '#065f46' : '#92400e',
+              border: `1px solid ${toast.type === 'success' ? '#6ee7b7' : '#fbbf24'}`,
+            }}>
+              {toast.text}
+            </div>
           </td>
         </tr>
       )}
@@ -461,16 +496,25 @@ function AddCategoryForm({ onAdd, onCancel }) {
   )
 }
 
-export default function Quotes({ quotes, quoteCategories, onAddCategory, onDeleteCategory, onAddQuote, onUpdateQuote, onDeleteQuote }) {
+export default function Quotes({ quotes, quoteCategories, onAddCategory, onDeleteCategory, onAddQuote, onUpdateQuote, onDeleteQuote, onPaymentRequestAdded }) {
   const [activeCategory, setActiveCategory] = useState(null)
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [showAddRow, setShowAddRow] = useState(false)
   const [deleteCatError, setDeleteCatError] = useState(null)
+  const [search, setSearch] = useState('')
 
   // Default to first category
   const effectiveActive = activeCategory ?? quoteCategories[0]?.id ?? null
 
   const categoryQuotes = quotes.filter((q) => q.category_id === effectiveActive)
+
+  const term = search.trim().toLowerCase()
+  const visibleQuotes = term
+    ? categoryQuotes.filter((q) =>
+        [q.supplier_name, q.my_opinion, q.notes, q.contact]
+          .some((f) => f && f.toLowerCase().includes(term))
+      )
+    : categoryQuotes
 
   async function handleDeleteCategory(id) {
     setDeleteCatError(null)
@@ -496,7 +540,7 @@ export default function Quotes({ quotes, quoteCategories, onAddCategory, onDelet
             key={cat.id}
             className={`chip${effectiveActive === cat.id ? ' chip-active' : ''}`}
             style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 14, padding: '7px 16px' }}
-            onClick={() => { setActiveCategory(cat.id); setShowAddRow(false) }}
+            onClick={() => { setActiveCategory(cat.id); setShowAddRow(false); setSearch('') }}
           >
             <span>{cat.icon}</span>
             <span>{cat.name}</span>
@@ -562,6 +606,29 @@ export default function Quotes({ quotes, quoteCategories, onAddCategory, onDelet
             </div>
           </div>
 
+          {/* Search */}
+          <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)' }}>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="חיפוש ספק..."
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                fontSize: 14,
+                fontFamily: 'inherit',
+                background: 'var(--bg)',
+                color: 'var(--text)',
+                outline: 'none',
+              }}
+              onFocus={(e) => { e.target.style.borderColor = 'var(--accent)' }}
+              onBlur={(e) => { e.target.style.borderColor = 'var(--border)' }}
+            />
+          </div>
+
           {/* Table */}
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -596,13 +663,20 @@ export default function Quotes({ quotes, quoteCategories, onAddCategory, onDelet
                       אין ספקים עדיין. לחצו על "הוסף ספק" כדי להתחיל.
                     </td>
                   </tr>
+                ) : visibleQuotes.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ padding: '32px 14px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+                      לא נמצאו תוצאות לחיפוש זה
+                    </td>
+                  </tr>
                 ) : (
-                  categoryQuotes.map((q) => (
+                  visibleQuotes.map((q) => (
                     <QuoteRow
                       key={q.id}
                       quote={q}
                       onUpdate={onUpdateQuote}
                       onDelete={onDeleteQuote}
+                      onPaymentRequestAdded={onPaymentRequestAdded}
                     />
                   ))
                 )}

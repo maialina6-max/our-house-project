@@ -105,6 +105,7 @@ const migrations = [
   'ALTER TABLE documents ADD COLUMN ai_important_dates TEXT',
   'ALTER TABLE documents ADD COLUMN ai_obligations TEXT',
   'ALTER TABLE documents ADD COLUMN ai_lawyer_questions TEXT',
+  'ALTER TABLE payment_requests ADD COLUMN source_quote_id INTEGER REFERENCES quotes(id)',
 ]
 for (const sql of migrations) {
   try { db.prepare(sql).run() } catch { /* column already exists */ }
@@ -612,7 +613,37 @@ app.put('/api/quotes/:id', (req, res) => {
   if (keys.length === 0) return res.status(400).json({ error: 'אין שדות לעדכון' })
   const set = keys.map((k) => `${k} = ?`).join(', ')
   db.prepare(`UPDATE quotes SET ${set} WHERE id = ?`).run(...keys.map((k) => fields[k]), req.params.id)
-  res.json(db.prepare('SELECT * FROM quotes WHERE id = ?').get(req.params.id))
+  const updatedQuote = db.prepare('SELECT * FROM quotes WHERE id = ?').get(req.params.id)
+
+  // Auto-create payment_request when status is set to 'נבחר'
+  let paymentRequest = null
+  let noAmountWarning = false
+  if (fields.status === 'נבחר') {
+    if (updatedQuote.amount == null) {
+      noAmountWarning = true
+    } else {
+      const existing = db.prepare('SELECT id FROM payment_requests WHERE source_quote_id = ?').get(updatedQuote.id)
+      if (!existing) {
+        const cat = db.prepare('SELECT name FROM quote_categories WHERE id = ?').get(updatedQuote.category_id)
+        const catName = cat ? cat.name : ''
+        const description = `תשלום ל${updatedQuote.supplier_name}${catName ? ` (${catName})` : ''}`
+        const prResult = db.prepare(`
+          INSERT INTO payment_requests
+            (description, payee, amount_before_vat, vat_required, vat_included, vat_amount, amount_total, status, source_quote_id)
+          VALUES (?, ?, ?, 0, 0, 0, ?, 'pending', ?)
+        `).run(
+          description,
+          updatedQuote.supplier_name,
+          updatedQuote.amount,
+          updatedQuote.amount,
+          updatedQuote.id,
+        )
+        paymentRequest = db.prepare('SELECT * FROM payment_requests WHERE id = ?').get(prResult.lastInsertRowid)
+      }
+    }
+  }
+
+  res.json({ quote: updatedQuote, payment_request: paymentRequest, no_amount_warning: noAmountWarning })
 })
 
 app.delete('/api/quotes/:id', (req, res) => {

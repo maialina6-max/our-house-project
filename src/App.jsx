@@ -180,9 +180,11 @@ export default function App() {
   }
 
   async function updateQuote(id, data) {
-    const updated = await apiUpdateQuote(id, data)
-    setQuotes((prev) => prev.map((q) => (q.id === id ? updated : q)))
-    return updated
+    const result = await apiUpdateQuote(id, data)
+    // Server returns { quote, payment_request, no_amount_warning }
+    const updatedQuote = result.quote ?? result
+    setQuotes((prev) => prev.map((q) => (q.id === id ? updatedQuote : q)))
+    return result
   }
 
   async function deleteQuote(id) {
@@ -235,6 +237,7 @@ export default function App() {
             onAddQuote={addQuote}
             onUpdateQuote={updateQuote}
             onDeleteQuote={deleteQuote}
+            onPaymentRequestAdded={handlePaymentRequestCreated}
           />
         )
       case 'chat':
